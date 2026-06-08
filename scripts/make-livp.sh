@@ -6,8 +6,8 @@ usage() {
 Usage:
   scripts/make-livp.sh input-video output.livp
 
-Creates a wallpaper-capable .livp candidate using the verified vendor-style
-neutral mebx template.
+Creates a wallpaper-capable .livp candidate using a compatible neutral
+mebx template supplied by the user.
 
 Fixed MVP output:
   - 1080x1920
@@ -35,14 +35,19 @@ fi
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd "$script_dir/.." && pwd)"
 output_livp="$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$output_livp")"
-vendor_photo="$repo_dir/vendor-livp/IMB_ZyUbrU.HEIC.heic"
-vendor_video="$repo_dir/vendor-livp/IMB_ZyUbrU.HEIC.mov"
+template_photo="${LIVEPHOTO_TEMPLATE_PHOTO:-$repo_dir/vendor-livp/IMB_ZyUbrU.HEIC.heic}"
+template_video="${LIVEPHOTO_TEMPLATE_VIDEO:-$repo_dir/vendor-livp/IMB_ZyUbrU.HEIC.mov}"
 
-if [[ ! -f "$vendor_photo" || ! -f "$vendor_video" ]]; then
-  echo "Missing vendor template assets under $repo_dir/vendor-livp" >&2
-  echo "Expected:" >&2
-  echo "  $vendor_photo" >&2
-  echo "  $vendor_video" >&2
+if [[ ! -f "$template_photo" || ! -f "$template_video" ]]; then
+  echo "Missing neutral Live Photo template assets." >&2
+  echo "Provide assets you have the right to use by either:" >&2
+  echo "  1. placing them at:" >&2
+  echo "     $repo_dir/vendor-livp/IMB_ZyUbrU.HEIC.heic" >&2
+  echo "     $repo_dir/vendor-livp/IMB_ZyUbrU.HEIC.mov" >&2
+  echo "  2. or setting:" >&2
+  echo "     LIVEPHOTO_TEMPLATE_PHOTO=/path/to/template.heic" >&2
+  echo "     LIVEPHOTO_TEMPLATE_VIDEO=/path/to/template.mov" >&2
+  echo "See docs/template-assets.md for details." >&2
   exit 1
 fi
 
@@ -85,9 +90,9 @@ echo "Writing Live Photo metadata..."
   cd "$repo_dir"
   swift run livephoto-packager \
     --photo "$cover_jpg" \
-    --template-photo-metadata "$vendor_photo" \
+    --template-photo-metadata "$template_photo" \
     --video "$normalized_mov" \
-    --template-video "$vendor_video" \
+    --template-video "$template_video" \
     --out "$pair_dir" \
     --photo-format heic \
     --preserve-input-metadata-tracks

@@ -2,6 +2,8 @@
 
 日期：2026-05-09
 
+公开说明：本文是 Mac 本机版产品草案。当前开源仓库不包含模板媒体资产；实际生成锁屏可用 `.livp` 时，需要用户提供有权使用的 neutral template assets。
+
 本文档描述一个可以安装在用户 Mac 上运行的本地版 Live Photo / `.livp` 生成工具。这个版本优先服务快速商业验证：用户在 Mac 上安装应用，输入提示词或导入视频，生成 iPhone 可保存、可设置锁屏动态壁纸的 `.livp` 文件。
 
 ## 1. 为什么先做 Mac 本机版
@@ -10,7 +12,7 @@
 
 - `Swift LivePhotoPackager CLI` 使用 `AVFoundation` / `ImageIO` / `CoreGraphics`。
 - FFmpeg 当前使用 `hevc_videotoolbox` 编码 HEVC。
-- 已验证成功的是 macOS 打包链路生成的 vendor-style `.livp`。
+- 已验证成功的是 macOS 打包链路生成的 compatible `.livp`。
 
 因此 Mac 本机版可以避开第一阶段的服务器部署、macOS Worker、队列、对象存储、账号系统和支付系统，把重点放在：
 
@@ -119,7 +121,7 @@ Core
   -> 写入 MOV content.identifier
   -> 注入中性 mebx 轨道
   -> 生成 HEIC + MOV
-  -> 打包 vendor-compatible `.livp`
+  -> 打包 compatible `.livp`
   -> 本地校验
   -> 保存到用户选择的位置
 ```
@@ -231,7 +233,7 @@ API Key 保存到 macOS Keychain，不写入普通配置文件。
 
 ## 9. 模板资产处理
 
-当前商业可行链路依赖 vendor-style 中性 `mebx` 模板。
+当前商业可行链路依赖 compatible neutral `mebx` 模板。
 
 应用内需要内置：
 
@@ -244,7 +246,7 @@ template.mov
 
 - 这两个模板资产决定 `.livp` 兼容性。
 - 需要做法律和产品风险评估。
-- 后续最好生成自有中性 `mebx` 模板，降低对购买样本的依赖。
+- 后续最好生成自有中性 `mebx` 模板，降低对第三方样本的依赖。
 
 ## 10. 本地历史记录
 

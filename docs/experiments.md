@@ -2,6 +2,8 @@
 
 日期：2026-05-09
 
+公开说明：本文是历史实验记录，可能提到本地私有样本、第三方样本或未随仓库发布的路径。开源仓库只提供生成方法、代码和调试工具；用户需要自行提供有权使用的模板资产。
+
 目标：验证 AI/自定义视频是否可以导出为真正 iOS Live Photo，并进一步验证是否可以作为 iPhone 锁屏动态壁纸。
 
 ## 1. Basic Live Photo Packager
@@ -101,12 +103,12 @@ output-static-template-migration/live-photo.mov
 
 即使是静止/低运动 iPhone 原生样本，其 `live-photo-info` 仍不能作为通用模板。
 
-## 4. Purchased `.livp` Sample
+## 4. Third-Party `.livp` Sample
 
 样本：
 
 ```text
-299 动态实况【苹果用户下载】.livp
+<private third-party sample>.livp
 ```
 
 拆包：
@@ -122,7 +124,7 @@ vendor-livp/IMB_ZyUbrU.HEIC.mov
 ZIP archive
 ```
 
-商家 MOV 结构：
+third-party MOV 结构：
 
 ```text
 video: HEVC / hvc1, 1080x1920, 1.0s, 60fps, 60 frames
@@ -131,7 +133,7 @@ track 2: live-photo-info, time_base=1/60000, start=0.05s, duration=0.95s, 57 sam
 track 3: still-image-time + still-image-transform, start=0.5s
 ```
 
-商家 HEIC metadata：
+third-party HEIC metadata：
 
 ```text
 MakerApple {
@@ -148,13 +150,13 @@ vendor live-photo-info:
   all sample payloads are identical
 ```
 
-这说明商家使用的是固定中性 metadata，而不是从每个视频真实估计相机运动。
+这说明该样本使用的是固定中性 metadata，而不是从每个视频真实估计相机运动。
 
 ## 5. Vendor Template Migration
 
 目标：
 
-验证商家的中性 `mebx` 是否能迁移到我们自己的视频。
+验证第三方样本中的中性 `mebx` 是否能迁移到我们自己的视频。
 
 生成输入：
 
@@ -177,9 +179,9 @@ output-vendor-template-migration/live-photo.mov
 做法：
 
 - 从自定义视频 0.5s 抽封面
-- photo 侧使用商家 HEIC metadata template，仅替换 `MakerApple[17]`
+- photo 侧使用 third-party HEIC metadata template，仅替换 `MakerApple[17]`
 - MOV 主视频使用自定义视频
-- MOV metadata tracks 复制商家 `.livp` 的中性 `mebx`
+- MOV metadata tracks 复制 third-party `.livp` 的中性 `mebx`
 - 写入全新 UUID：`9DF8D4D3-2C27-42F3-A514-D0A6277AE41B`
 
 结果：
@@ -190,7 +192,7 @@ output-vendor-template-migration/live-photo.mov
 
 结论：
 
-商家风格中性 `live-photo-info` 可以迁移到自定义视频。商业路线可行。
+compatible neutral `live-photo-info` 可以迁移到自定义视频。商业路线可行。
 
 ## 6. iOS App Spike
 
@@ -221,7 +223,9 @@ iOSSpike/LivePhotoSpike.xcodeproj
 - 如果 custom case 经 App 保存后可锁屏，App 路线可以作为后端打包的替代/补充。
 - 如果仍不可锁屏，则 App 不会自动生成所需 `live-photo-info`。
 
-## 7. Web MVP and Baidu Netdisk Import
+## 7. Historical Web MVP and Baidu Netdisk Import
+
+公开说明：本节记录的是历史 Web MVP；当前开源仓库不包含 `web/server.mjs`，可运行入口以根目录 `README.md` 为准。
 
 已实现：
 
@@ -247,10 +251,10 @@ curl -F 'video=@Samples/vendor-template-custom.mov' http://localhost:3000/api/ge
   -> 但百度网盘/iOS 保存提示无法保存该格式
 ```
 
-对比商家 `.livp` 发现：
+对比 third-party `.livp` 发现：
 
 ```text
-商家 ZIP comment:
+sample ZIP comment:
   00020000003200013DBD000300013E20000564FF313030304C495650
 
 含义:
@@ -263,7 +267,7 @@ curl -F 'video=@Samples/vendor-template-custom.mov' http://localhost:3000/api/ge
   313030304C495650  # 1000LIVP
 ```
 
-商家内部文件名：
+sample internal file names:
 
 ```text
 IMB_ZyUbrU.HEIC.heic
@@ -297,18 +301,18 @@ Web 生成 .livp
 
 结论：
 
-`.livp` 的 ZIP comment 和内部命名影响第三方 App/网盘识别。商业交付必须生成 vendor-compatible `.livp`，不能只是普通 ZIP 改后缀。
+`.livp` 的 ZIP comment 和内部命名影响第三方 App/网盘识别。商业交付必须生成 compatible `.livp`，不能只是普通 ZIP 改后缀。
 
 ## Open Questions
 
 - `.livp` 通过不同渠道下载/导入后是否都能保持锁屏能力？
-- 1 秒 60fps 是否是硬性规格，还是只是当前 vendor 模板限制？
+- 1 秒 60fps 是否是硬性规格，还是只是当前 neutral template 限制？
 - 是否可以生成 2 秒或 3 秒的中性 `mebx`？
-- 是否可以把 vendor neutral payload 参数化，而不是依赖购买样本？
+- 是否可以把 neutral payload 参数化，而不是依赖第三方样本？
 - 不同 iOS 版本是否对 `.livp`/Live Photo wallpaper 校验不同？
 - 目标 AI 视频模型输出是否能稳定压缩到 1 秒 60fps 且观感可接受？
 - `.livp` 文件命名和 ZIP 内文件名是否影响导入体验？
-- ZIP comment 是否还有其他版本/字段含义，当前仅按商家样本复刻。
+- ZIP comment 是否还有其他版本/字段含义，当前仅按第三方样本复刻。
 - 是否需要输出 HEIC，还是 JPG 足够？
 
 ## Next Implementation Step
@@ -327,7 +331,7 @@ make-livp input.mp4 output.livp
 4. 生成 UUID
 5. 写 photo `MakerApple[17]`
 6. 写 MOV `content.identifier`
-7. 注入 vendor neutral `mebx`
+7. 注入 neutral `mebx`
 8. 打包 `.livp`
 
 第一版只支持固定规格。
@@ -336,11 +340,10 @@ make-livp input.mp4 output.livp
 
 ```bash
 ./scripts/make-livp.sh input.mp4 output.livp
-npm run web
 ```
 
 说明：
 
-- `scripts/make-livp.sh` 会转码、抽帧、写 metadata、注入 vendor neutral `mebx`、打包 `.livp`。
-- `web/server.mjs` 提供最小上传网页和 `/api/generate` 接口。
-- 当前已在 Xcode 26.4.1 下跑通 CLI 和 Web API。
+- `scripts/make-livp.sh` 会转码、抽帧、写 metadata、注入 neutral `mebx`、打包 `.livp`。
+- 当前开源仓库保留 CLI 路径；历史 Web MVP 未随仓库发布。
+- 当前已在 Xcode 26.4.1 下跑通 CLI。

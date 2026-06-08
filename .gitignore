@@ -136,3 +136,17 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
+
+# Private Live Photo template assets.
+# Keep vendor-livp/README.md in git, but do not publish template media files
+# unless you own the rights and have verified that redistribution is allowed.
+vendor-livp/*
+!vendor-livp/README.md
+
+# Generated Live Photo outputs
+.build/
+.tmp/
+*.livp
+output/
+output-*/
+test-output*/

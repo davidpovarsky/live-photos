@@ -2,6 +2,8 @@
 
 日期：2026-05-09
 
+公开说明：本文是下一阶段产品化架构草案，包含历史实验背景和当时的 Web MVP 设想。当前开源仓库的可运行入口以根目录 `README.md` 和 `docs/live-photo-generation.md` 为准；模板媒体资产需要用户自行提供。
+
 本文档面向下一阶段生产级前后端开发，目标是把当前已验证的 `.livp` 生成能力，升级为可商业化运营的 Web 平台。
 
 如果目标是先做可安装在用户 Mac 上运行的本地应用，见 [Mac 本机可安装版技术方案](mac-local-app.md)。
@@ -23,8 +25,8 @@
 
 - 只写基础 Live Photo 元数据不够，iOS Photos 可识别，但锁屏动态效果不可用。
 - iPhone 原生 `mebx` 不能作为通用模板迁移到任意视频。
-- 商家 `.livp` 的中性 `mebx` 轨道可以迁移到自定义视频，并可作为锁屏动态壁纸。
-- `.livp` 不只是普通 ZIP 改后缀，必须包含商家风格内部文件名和 ZIP 注释。
+- 已验证的中性 `mebx` 轨道可以迁移到自定义视频，并可作为锁屏动态壁纸。
+- `.livp` 不只是普通 ZIP 改后缀，必须包含兼容的内部文件名和 ZIP 注释。
 - 当前稳定规格为 `1080x1920 / 1s / 60fps / HEVC hvc1 / 0.5s cover / silent AAC`。
 
 因此生产 MVP 固定输出规格，不开放任意比例、任意时长、任意帧率。
@@ -828,7 +830,7 @@ web/static/*
 
 ### 19.3 合规风险
 
-- 使用购买 `.livp` 作为逆向参考需要法律评估。
+- 使用第三方 `.livp` 作为逆向参考需要法律评估。
 - 模板、提示词、生成结果可能涉及版权或肖像权。
 - 付费下载前后需要明确退款规则。
 
@@ -933,7 +935,7 @@ AWS EC2 Mac
 其他支持 macOS 的 CI/服务器供应商
 ```
 
-不推荐第一版直接把打包链路迁移到 Linux。原因是当前通过真实 iPhone 验证成功的是 macOS AVFoundation + VideoToolbox + vendor-style `.livp` 这条链路，换成 Linux 原生 MP4/MOV/HEIC 库后需要重新验证所有锁屏兼容性。
+不推荐第一版直接把打包链路迁移到 Linux。原因是当前通过真实 iPhone 验证成功的是 macOS AVFoundation + VideoToolbox + compatible `.livp` 这条链路，换成 Linux 原生 MP4/MOV/HEIC 库后需要重新验证所有锁屏兼容性。
 
 ### 21.5 推荐生产形态
 
