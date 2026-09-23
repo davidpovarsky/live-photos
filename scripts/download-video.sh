@@ -22,6 +22,16 @@ mkdir -p "$(dirname "$out")"
 rm -f "$out"
 
 case "$url" in
+  *photos.app.goo.gl/*|*photos.google.com/*)
+    echo "Resolving Google Photos share link..."
+    video_url="$(node tools/google-photos-video-url.mjs "$url")"
+    if [[ -z "$video_url" ]]; then
+      echo "Google Photos resolver returned an empty video URL." >&2
+      exit 1
+    fi
+    echo "Downloading video from Google Photos..."
+    curl       --fail       --location       --retry 3       --retry-delay 2       --connect-timeout 30       --user-agent "Mozilla/5.0"       "$video_url"       --output "$out"
+    ;;
   *drive.google.com/*)
     echo "Downloading from Google Drive..."
     python3 -m pip install --quiet gdown
