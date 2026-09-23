@@ -481,7 +481,7 @@ struct LivePhotoPackager {
         )
 
         guard status == noErr, let output else {
-            throw PackagerError.writerFailed("Could not retime metadata sample (OSStatus \\(status))")
+            throw PackagerError.writerFailed("Could not retime metadata sample (OSStatus \(status))")
         }
 
         return output
