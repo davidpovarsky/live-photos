@@ -9,10 +9,9 @@ if (!sharedUrl) {
 }
 
 try {
-  const items = await fetchImageUrls(sharedUrl, {
-    timeoutMs: 30_000,
-    maxAttempts: 5,
-  });
+  // Keep this call compatible with both the currently published package and
+  // newer source versions: older releases interpret arg #2 as AbortSignal.
+  const items = await fetchImageUrls(sharedUrl);
 
   if (!items) {
     console.error('Could not parse the Google Photos shared page.');
