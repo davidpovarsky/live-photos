@@ -31,6 +31,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
       - name: Show toolchain
         run: |
           swift --version
@@ -60,12 +64,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install ffmpeg
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install runtime helpers
         run: |
           if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
             brew install ffmpeg
           fi
+          npm install --no-save --ignore-scripts @marcus5914/google-photos-album-image-url-fetch@1.1.0
           ffmpeg -version | head -n 1
+          node --version
 
       - name: Restore neutral Live Photo metadata template
         id: template
@@ -81,7 +91,7 @@ jobs:
           template_gz="$RUNNER_TEMP/neutral-template.mov.gz"
           template_mov="$RUNNER_TEMP/neutral-template.mov"
 
-          printf '%s' "$TEMPLATE_GZ_B64" | base64 --decode > "$template_gz"
+          printf '%s' "$TEMPLATE_GZ_B64" | base64 -D > "$template_gz"
           gzip -dc "$template_gz" > "$template_mov"
 
           if [[ ! -s "$template_mov" ]]; then
