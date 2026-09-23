@@ -227,6 +227,11 @@ struct LivePhotoPackager {
         }
     }
 
+    private struct MetadataCopyPair {
+        let output: AVAssetReaderTrackOutput
+        let input: AVAssetWriterInput
+    }
+
     private static func writeVideo(
         inputURL: URL,
         outputURL: URL,
@@ -244,10 +249,13 @@ struct LivePhotoPackager {
         let videoReader = try AVAssetReader(asset: videoAsset)
         let metadataReader = templateVideoURL == nil ? videoReader : try AVAssetReader(asset: metadataAsset)
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mov)
+        let targetDurationTime = try await videoAsset.load(.duration)
+        let targetDurationSeconds = CMTimeGetSeconds(targetDurationTime)
 
         writer.metadata = videoMetadataItems(assetIdentifier: assetIdentifier)
 
         var copyPairs: [(AVAssetReaderOutput, AVAssetWriterInput)] = []
+        var templateMetadataPairs: [MetadataCopyPair] = []
         let videoAudioTypes: [AVMediaType] = [.video, .audio]
 
         for mediaType in videoAudioTypes {
@@ -292,7 +300,12 @@ struct LivePhotoPackager {
                     throw PackagerError.cannotAddWriterInput(AVMediaType.metadata.rawValue)
                 }
                 writer.add(input)
-                copyPairs.append((output, input))
+
+                if templateVideoURL != nil {
+                    templateMetadataPairs.append(MetadataCopyPair(output: output, input: input))
+                } else {
+                    copyPairs.append((output, input))
+                }
             }
         }
 
@@ -308,16 +321,31 @@ struct LivePhotoPackager {
             metadataInput = input
         }
 
+        var templateMetadataSamples: [([CMSampleBuffer], AVAssetWriterInput)] = []
+
+        if templateVideoURL != nil {
+            guard metadataReader.startReading() else {
+                throw PackagerError.readerFailed(metadataReader.error?.localizedDescription ?? "unknown")
+            }
+
+            for pair in templateMetadataPairs {
+                var samples: [CMSampleBuffer] = []
+                while let sample = pair.output.copyNextSampleBuffer() {
+                    samples.append(sample)
+                }
+                templateMetadataSamples.append((samples, pair.input))
+            }
+
+            if metadataReader.status == .failed {
+                throw PackagerError.readerFailed(metadataReader.error?.localizedDescription ?? "unknown")
+            }
+        }
+
         guard writer.startWriting() else {
             throw PackagerError.writerFailed(writer.error?.localizedDescription ?? "unknown")
         }
         guard videoReader.startReading() else {
             throw PackagerError.readerFailed(videoReader.error?.localizedDescription ?? "unknown")
-        }
-        if templateVideoURL != nil {
-            guard metadataReader.startReading() else {
-                throw PackagerError.readerFailed(metadataReader.error?.localizedDescription ?? "unknown")
-            }
         }
 
         writer.startSession(atSourceTime: .zero)
@@ -325,18 +353,180 @@ struct LivePhotoPackager {
             appendStillImageTime(using: metadataInput, at: stillImageTime)
         }
 
-        try await copySamples(copyPairs)
+        async let mediaCopy: Void = copySamples(copyPairs)
+        async let metadataCopy: Void = copyAdaptedTemplateMetadata(
+            templateMetadataSamples,
+            targetDurationSeconds: targetDurationSeconds,
+            stillImageTime: stillImageTime
+        )
+
+        try await mediaCopy
+        try await metadataCopy
 
         if videoReader.status == .failed {
             throw PackagerError.readerFailed(videoReader.error?.localizedDescription ?? "unknown")
-        }
-        if metadataReader.status == .failed {
-            throw PackagerError.readerFailed(metadataReader.error?.localizedDescription ?? "unknown")
         }
 
         await writer.finishWriting()
         if writer.status == .failed {
             throw PackagerError.writerFailed(writer.error?.localizedDescription ?? "unknown")
+        }
+    }
+
+    private static func copyAdaptedTemplateMetadata(
+        _ tracks: [([CMSampleBuffer], AVAssetWriterInput)],
+        targetDurationSeconds: Double,
+        stillImageTime: Double
+    ) async throws {
+        guard !tracks.isEmpty else {
+            return
+        }
+
+        var prepared: [([CMSampleBuffer], AVAssetWriterInput)] = []
+        prepared.reserveCapacity(tracks.count)
+
+        for (samples, input) in tracks {
+            guard let first = samples.first else {
+                input.markAsFinished()
+                continue
+            }
+
+            if samples.count == 1 {
+                let originalDuration = CMSampleBufferGetDuration(first)
+                let duration = originalDuration.isValid && originalDuration.value > 0
+                    ? originalDuration
+                    : CMTime(value: 1, timescale: 600)
+
+                let timescale = max(CMSampleBufferGetPresentationTimeStamp(first).timescale, 600)
+                let presentationTime = CMTime(
+                    seconds: stillImageTime,
+                    preferredTimescale: timescale
+                )
+
+                let retimed = try copySampleBuffer(
+                    first,
+                    presentationTime: presentationTime,
+                    duration: duration
+                )
+                prepared.append(([retimed], input))
+                continue
+            }
+
+            let firstTime = CMSampleBufferGetPresentationTimeStamp(first)
+            var sampleDuration = CMSampleBufferGetDuration(first)
+
+            if !sampleDuration.isValid || sampleDuration.value <= 0 {
+                if samples.count > 1 {
+                    let secondTime = CMSampleBufferGetPresentationTimeStamp(samples[1])
+                    sampleDuration = CMTimeSubtract(secondTime, firstTime)
+                }
+            }
+
+            let sampleDurationSeconds = CMTimeGetSeconds(sampleDuration)
+            let firstTimeSeconds = CMTimeGetSeconds(firstTime)
+
+            guard sampleDurationSeconds.isFinite,
+                  sampleDurationSeconds > 0,
+                  firstTimeSeconds.isFinite,
+                  targetDurationSeconds.isFinite,
+                  targetDurationSeconds > firstTimeSeconds else {
+                prepared.append((samples, input))
+                continue
+            }
+
+            // The neutral live-photo-info payload is intentionally identical
+            // for every sample. Extend or trim it to end exactly with the
+            // requested video duration while keeping the original 0.05s start.
+            let exactCount = (targetDurationSeconds - firstTimeSeconds) / sampleDurationSeconds
+            let targetCount = max(1, Int(floor(exactCount + 0.000001)))
+
+            var retimedSamples: [CMSampleBuffer] = []
+            retimedSamples.reserveCapacity(targetCount)
+
+            for index in 0..<targetCount {
+                let offset = CMTimeMultiply(sampleDuration, multiplier: Int32(index))
+                let presentationTime = CMTimeAdd(firstTime, offset)
+                let retimed = try copySampleBuffer(
+                    first,
+                    presentationTime: presentationTime,
+                    duration: sampleDuration
+                )
+                retimedSamples.append(retimed)
+            }
+
+            prepared.append((retimedSamples, input))
+        }
+
+        try await appendPreparedSamples(prepared)
+    }
+
+    private static func copySampleBuffer(
+        _ sampleBuffer: CMSampleBuffer,
+        presentationTime: CMTime,
+        duration: CMTime
+    ) throws -> CMSampleBuffer {
+        var timing = CMSampleTimingInfo(
+            duration: duration,
+            presentationTimeStamp: presentationTime,
+            decodeTimeStamp: .invalid
+        )
+        var output: CMSampleBuffer?
+
+        let status = CMSampleBufferCreateCopyWithNewTiming(
+            allocator: kCFAllocatorDefault,
+            sampleBuffer: sampleBuffer,
+            sampleTimingEntryCount: 1,
+            sampleTimingArray: &timing,
+            sampleBufferOut: &output
+        )
+
+        guard status == noErr, let output else {
+            throw PackagerError.writerFailed("Could not retime metadata sample (OSStatus \\(status))")
+        }
+
+        return output
+    }
+
+    private static func appendPreparedSamples(
+        _ tracks: [([CMSampleBuffer], AVAssetWriterInput)]
+    ) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            let group = DispatchGroup()
+            let queue = DispatchQueue(
+                label: "live-photo-packager.metadata-copy",
+                attributes: .concurrent
+            )
+
+            for (samples, input) in tracks {
+                group.enter()
+                var index = 0
+                var didFinish = false
+
+                input.requestMediaDataWhenReady(on: queue) {
+                    guard !didFinish else { return }
+
+                    while input.isReadyForMoreMediaData {
+                        if index < samples.count {
+                            if !input.append(samples[index]) {
+                                input.markAsFinished()
+                                didFinish = true
+                                group.leave()
+                                return
+                            }
+                            index += 1
+                        } else {
+                            input.markAsFinished()
+                            didFinish = true
+                            group.leave()
+                            return
+                        }
+                    }
+                }
+            }
+
+            group.notify(queue: queue) {
+                continuation.resume()
+            }
         }
     }
 
