@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       video_url:
-        description: "Direct video URL, Google Drive share link, or Dropbox share link"
+        description: "Direct HTTPS, Google Drive, or Dropbox share link"
         required: true
         type: string
       output_name:
@@ -35,15 +35,14 @@ jobs:
         run: |
           swift --version
           node --version
+          python3 --version
           bash --version | head -n 1
 
-      - name: Validate shell scripts
+      - name: Validate scripts
         run: |
           bash -n scripts/download-video.sh
           bash -n scripts/make-livp-template-matched.sh
-
-      - name: Validate Node tools
-        run: |
+          python3 -m py_compile tools/compact-live-photo-template.py
           node --check tools/set-livp-zip-comment.js
           node --check tools/dump-mebx-samples.js
 
@@ -55,7 +54,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 25
     env:
-      TEMPLATE_KEY: ${{ secrets.LIVEPHOTO_TEMPLATE_KEY }}
+      TEMPLATE_GZ_B64: ${{ secrets.LIVEPHOTO_NEUTRAL_TEMPLATE_GZ_B64 }}
 
     steps:
       - uses: actions/checkout@v4
@@ -67,49 +66,37 @@ jobs:
           fi
           ffmpeg -version | head -n 1
 
-      - name: Restore private template
+      - name: Restore neutral Live Photo metadata template
         id: template
         shell: bash
         run: |
           set -euo pipefail
 
-          encrypted="private-assets/intolive-template.zip.enc"
-          if [[ ! -f "$encrypted" ]]; then
-            echo "::error::Missing $encrypted. Upload the encrypted template asset first."
-            exit 1
-          fi
-          if [[ -z "${TEMPLATE_KEY:-}" ]]; then
-            echo "::error::Repository secret LIVEPHOTO_TEMPLATE_KEY is not configured."
+          if [[ -z "${TEMPLATE_GZ_B64:-}" ]]; then
+            echo "::error::Missing Actions secret LIVEPHOTO_NEUTRAL_TEMPLATE_GZ_B64."
             exit 1
           fi
 
-          template_dir="$RUNNER_TEMP/live-photo-template"
-          mkdir -p "$template_dir"
+          template_gz="$RUNNER_TEMP/neutral-template.mov.gz"
+          template_mov="$RUNNER_TEMP/neutral-template.mov"
 
-          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
-            -in "$encrypted" \
-            -out "$RUNNER_TEMP/live-photo-template.zip" \
-            -pass env:TEMPLATE_KEY
+          printf '%s' "$TEMPLATE_GZ_B64" | base64 --decode > "$template_gz"
+          gzip -dc "$template_gz" > "$template_mov"
 
-          unzip -q "$RUNNER_TEMP/live-photo-template.zip" -d "$template_dir"
-
-          template_photo="$(find "$template_dir" -type f \( -iname '*.heic' -o -iname '*.heif' -o -iname '*.jpg' -o -iname '*.jpeg' \) ! -path '*/__MACOSX/*' | head -n 1)"
-          template_video="$(find "$template_dir" -type f \( -iname '*.mov' -o -iname '*.mp4' \) ! -path '*/__MACOSX/*' | head -n 1)"
-
-          if [[ -z "$template_photo" || -z "$template_video" ]]; then
-            echo "::error::The encrypted template archive must contain one HEIC/JPEG image and one MOV video."
+          if [[ ! -s "$template_mov" ]]; then
+            echo "::error::Could not restore neutral metadata template."
             exit 1
           fi
 
-          echo "photo=$template_photo" >> "$GITHUB_OUTPUT"
-          echo "video=$template_video" >> "$GITHUB_OUTPUT"
+          node tools/dump-mebx-samples.js "$template_mov" > "$RUNNER_TEMP/template-mebx.txt"
+          cat "$RUNNER_TEMP/template-mebx.txt"
 
-          echo "Template video:"
-          ffprobe -v error \
-            -select_streams v:0 \
-            -show_entries stream=codec_name,codec_tag_string,width,height,avg_frame_rate \
-            -show_entries format=duration \
-            -of default=noprint_wrappers=1 "$template_video"
+          if ! grep -q 'samples=57' "$RUNNER_TEMP/template-mebx.txt"; then
+            echo "::error::Neutral template does not contain the expected 57-sample live-photo-info track."
+            exit 1
+          fi
+
+          echo "video=$template_mov" >> "$GITHUB_OUTPUT"
 
       - name: Download source video
         shell: bash
@@ -124,7 +111,6 @@ jobs:
         shell: bash
         env:
           REQUESTED_NAME: ${{ inputs.output_name }}
-          TEMPLATE_PHOTO: ${{ steps.template.outputs.photo }}
           TEMPLATE_VIDEO: ${{ steps.template.outputs.video }}
         run: |
           set -euo pipefail
@@ -135,11 +121,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/live-photo-output"
           output="$RUNNER_TEMP/live-photo-output/$safe_name.livp"
 
-          scripts/make-livp-template-matched.sh \
-            "$RUNNER_TEMP/source-video" \
-            "$output" \
-            "$TEMPLATE_PHOTO" \
-            "$TEMPLATE_VIDEO"
+          scripts/make-livp-template-matched.sh             "$RUNNER_TEMP/source-video"             "$output"             "$TEMPLATE_VIDEO"
 
           echo "output=$output" >> "$GITHUB_OUTPUT"
           echo "name=$safe_name" >> "$GITHUB_OUTPUT"
@@ -161,5 +143,5 @@ jobs:
             echo
             echo "Output: \`${{ steps.generate.outputs.name }}.livp\`"
             echo
-            echo "Open the artifact above, download it on the iPhone/iPad, unzip the artifact ZIP, then open/save the .livp file."
+            echo "Download the artifact, unzip the artifact ZIP, then open/save the .livp file on iPhone."
           } >> "$GITHUB_STEP_SUMMARY"
