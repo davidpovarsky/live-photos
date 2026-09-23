@@ -58,6 +58,7 @@ jobs:
           bash -n scripts/make-livp-template-matched.sh
           python3 -m py_compile tools/compact-live-photo-template.py
           python3 -m py_compile tools/repair-compact-live-photo-template.py
+          python3 -m py_compile tools/extend-neutral-template.py
           node --check tools/set-livp-zip-comment.js
           node --check tools/dump-mebx-samples.js
           node --check tools/google-photos-video-url.mjs
