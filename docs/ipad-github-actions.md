@@ -5,14 +5,21 @@ This fork adds a cloud workflow that converts a video into a template-backed
 
 ## One-time setup
 
-1. Put the encrypted template file at:
-   `private-assets/intolive-template.zip.enc`
-2. In **Settings -> Secrets and variables -> Actions**, create:
-   `LIVEPHOTO_TEMPLATE_KEY`
+The full intoLive HEIC/MOV pair is **not** stored in this public repository.
+Only its compact neutral `mebx` metadata template is needed at runtime.
 
-Never commit the unencrypted template files.
+Create this Actions secret:
 
-## Create a Live Photo
+`LIVEPHOTO_NEUTRAL_TEMPLATE_GZ_B64`
+
+The value is a gzip-compressed, Base64-encoded compact MOV containing only the
+neutral metadata tracks. The source media itself is not placed in Git.
+
+Path in GitHub:
+
+**Settings -> Secrets and variables -> Actions -> New repository secret**
+
+## Create a Live Photo from iPad/iPhone
 
 1. Upload the source video to Google Drive or Dropbox.
 2. Create a share link that the GitHub runner can download.
@@ -20,19 +27,31 @@ Never commit the unencrypted template files.
 4. Paste the link into **video_url**.
 5. Optionally choose an output name.
 6. Run the workflow.
-7. When it finishes, download the artifact. The artifact is a ZIP containing
-   the generated `.livp` file.
+7. When it finishes, download the artifact.
+8. Unzip the artifact ZIP; inside is the generated `.livp`.
 
-The workflow accepts ordinary direct HTTPS links too.
+Ordinary direct HTTPS video links are also accepted.
 
-## Output matching
+## Current lock-screen profile
 
-The converter probes the private MOV template and automatically matches its:
+The first version intentionally follows the project's verified fixed profile:
 
-- width and height
-- duration
-- frame rate
-- presence/absence of an audio track
+- 1080x1920
+- 1.0 second
+- 60 fps
+- HEVC / `hvc1`
+- silent AAC
+- cover at 0.5 seconds
+- neutral `mebx` metadata tracks
 
-The source video is looped if necessary and center-cropped to fill the template
-frame. The template's metadata tracks are then copied by the Swift packager.
+The source video is looped if shorter than one second and center-cropped to
+fill the vertical frame.
+
+## Regenerating the compact secret
+
+If the neutral template is ever replaced, run:
+
+`python3 tools/compact-live-photo-template.py TEMPLATE.mov compact-template.mov`
+
+Then gzip and Base64 encode `compact-template.mov` and store the result in
+`LIVEPHOTO_NEUTRAL_TEMPLATE_GZ_B64`.
