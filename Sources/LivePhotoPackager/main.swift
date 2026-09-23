@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -353,15 +353,12 @@ struct LivePhotoPackager {
             appendStillImageTime(using: metadataInput, at: stillImageTime)
         }
 
-        async let mediaCopy: Void = copySamples(copyPairs)
-        async let metadataCopy: Void = copyAdaptedTemplateMetadata(
+        try await copySamples(copyPairs)
+        try await copyAdaptedTemplateMetadata(
             templateMetadataSamples,
             targetDurationSeconds: targetDurationSeconds,
             stillImageTime: stillImageTime
         )
-
-        try await mediaCopy
-        try await metadataCopy
 
         if videoReader.status == .failed {
             throw PackagerError.readerFailed(videoReader.error?.localizedDescription ?? "unknown")
@@ -382,9 +379,6 @@ struct LivePhotoPackager {
             return
         }
 
-        var prepared: [([CMSampleBuffer], AVAssetWriterInput)] = []
-        prepared.reserveCapacity(tracks.count)
-
         for (samples, input) in tracks {
             guard let first = samples.first else {
                 input.markAsFinished()
@@ -392,12 +386,8 @@ struct LivePhotoPackager {
             }
 
             if samples.count == 1 {
-                let originalDuration = CMSampleBufferGetDuration(first)
-                let duration = originalDuration.isValid && originalDuration.value > 0
-                    ? originalDuration
-                    : CMTime(value: 1, timescale: 600)
-
                 let timescale = max(CMSampleBufferGetPresentationTimeStamp(first).timescale, 600)
+                let duration = CMTime(value: 1, timescale: 600)
                 let presentationTime = CMTime(
                     seconds: stillImageTime,
                     preferredTimescale: timescale
@@ -408,37 +398,22 @@ struct LivePhotoPackager {
                     presentationTime: presentationTime,
                     duration: duration
                 )
-                prepared.append(([retimed], input))
+
+                print("Adapted still-image metadata to \\(stillImageTime)s")
+                try await appendSamples([retimed], to: input)
                 continue
             }
 
-            let firstTime = CMSampleBufferGetPresentationTimeStamp(first)
-            var sampleDuration = CMSampleBufferGetDuration(first)
-
-            if !sampleDuration.isValid || sampleDuration.value <= 0 {
-                if samples.count > 1 {
-                    let secondTime = CMSampleBufferGetPresentationTimeStamp(samples[1])
-                    sampleDuration = CMTimeSubtract(secondTime, firstTime)
-                }
-            }
-
-            let sampleDurationSeconds = CMTimeGetSeconds(sampleDuration)
-            let firstTimeSeconds = CMTimeGetSeconds(firstTime)
-
-            guard sampleDurationSeconds.isFinite,
-                  sampleDurationSeconds > 0,
-                  firstTimeSeconds.isFinite,
-                  targetDurationSeconds.isFinite,
-                  targetDurationSeconds > firstTimeSeconds else {
-                prepared.append((samples, input))
-                continue
-            }
-
-            // The neutral live-photo-info payload is intentionally identical
-            // for every sample. Extend or trim it to end exactly with the
-            // requested video duration while keeping the original 0.05s start.
-            let exactCount = (targetDurationSeconds - firstTimeSeconds) / sampleDurationSeconds
-            let targetCount = max(1, Int(floor(exactCount + 0.000001)))
+            // The intoLive neutral live-photo-info track is a fixed 60 Hz
+            // sequence whose payload is identical in every sample. Generate
+            // the same neutral sample from 0.05s until the requested endpoint.
+            let timescale = max(CMSampleBufferGetPresentationTimeStamp(first).timescale, 60000)
+            let firstTime = CMTime(seconds: 0.05, preferredTimescale: timescale)
+            let sampleDuration = CMTime(seconds: 1.0 / 60.0, preferredTimescale: timescale)
+            let targetCount = max(
+                1,
+                Int(round(max(0, targetDurationSeconds - 0.05) * 60.0))
+            )
 
             var retimedSamples: [CMSampleBuffer] = []
             retimedSamples.reserveCapacity(targetCount)
@@ -454,10 +429,13 @@ struct LivePhotoPackager {
                 retimedSamples.append(retimed)
             }
 
-            prepared.append((retimedSamples, input))
-        }
+            print(
+                "Adapted live-photo-info: \\(targetCount) samples, " +
+                "0.05s -> \\(targetDurationSeconds)s"
+            )
 
-        try await appendPreparedSamples(prepared)
+            try await appendSamples(retimedSamples, to: input)
+        }
     }
 
     private static func copySampleBuffer(
@@ -487,45 +465,39 @@ struct LivePhotoPackager {
         return output
     }
 
-    private static func appendPreparedSamples(
-        _ tracks: [([CMSampleBuffer], AVAssetWriterInput)]
+    private static func appendSamples(
+        _ samples: [CMSampleBuffer],
+        to input: AVAssetWriterInput
     ) async throws {
         try await withCheckedThrowingContinuation { continuation in
-            let group = DispatchGroup()
-            let queue = DispatchQueue(
-                label: "live-photo-packager.metadata-copy",
-                attributes: .concurrent
-            )
+            let queue = DispatchQueue(label: "live-photo-packager.metadata-append")
+            var index = 0
+            var finished = false
 
-            for (samples, input) in tracks {
-                group.enter()
-                var index = 0
-                var didFinish = false
+            input.requestMediaDataWhenReady(on: queue) {
+                guard !finished else { return }
 
-                input.requestMediaDataWhenReady(on: queue) {
-                    guard !didFinish else { return }
-
-                    while input.isReadyForMoreMediaData {
-                        if index < samples.count {
-                            if !input.append(samples[index]) {
-                                input.markAsFinished()
-                                didFinish = true
-                                group.leave()
-                                return
-                            }
-                            index += 1
-                        } else {
+                while input.isReadyForMoreMediaData {
+                    if index < samples.count {
+                        if !input.append(samples[index]) {
+                            finished = true
                             input.markAsFinished()
-                            didFinish = true
-                            group.leave()
+                            continuation.resume(
+                                throwing: PackagerError.writerFailed(
+                                    "Could not append adapted metadata sample \\(index + 1) of \\(samples.count)"
+                                )
+                            )
                             return
                         }
+                        index += 1
+                    } else {
+                        finished = true
+                        input.markAsFinished()
+                        print("Appended \\(index) adapted metadata samples")
+                        continuation.resume()
+                        return
                     }
                 }
-            }
-
-            group.notify(queue: queue) {
-                continuation.resume()
             }
         }
     }
