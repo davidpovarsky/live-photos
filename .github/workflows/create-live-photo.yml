@@ -47,6 +47,7 @@ jobs:
           bash -n scripts/download-video.sh
           bash -n scripts/make-livp-template-matched.sh
           python3 -m py_compile tools/compact-live-photo-template.py
+          python3 -m py_compile tools/repair-compact-live-photo-template.py
           node --check tools/set-livp-zip-comment.js
           node --check tools/dump-mebx-samples.js
           node --check tools/google-photos-video-url.mjs
@@ -89,15 +90,20 @@ jobs:
           fi
 
           template_gz="$RUNNER_TEMP/neutral-template.mov.gz"
+          template_raw="$RUNNER_TEMP/neutral-template-raw.mov"
           template_mov="$RUNNER_TEMP/neutral-template.mov"
 
           printf '%s' "$TEMPLATE_GZ_B64" | base64 -D > "$template_gz"
-          gzip -dc "$template_gz" > "$template_mov"
+          gzip -dc "$template_gz" > "$template_raw"
 
-          if [[ ! -s "$template_mov" ]]; then
+          if [[ ! -s "$template_raw" ]]; then
             echo "::error::Could not restore neutral metadata template."
             exit 1
           fi
+
+          # Repairs secrets created by the first compact-template helper, while
+          # also harmlessly normalizing already-correct compact templates.
+          python3 tools/repair-compact-live-photo-template.py "$template_raw" "$template_mov"
 
           node tools/dump-mebx-samples.js "$template_mov" > "$RUNNER_TEMP/template-mebx.txt"
           cat "$RUNNER_TEMP/template-mebx.txt"
