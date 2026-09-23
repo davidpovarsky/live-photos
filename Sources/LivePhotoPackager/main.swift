@@ -1,4 +1,4 @@
-@preconcurrency import AVFoundation
+import AVFoundation
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -227,11 +227,6 @@ struct LivePhotoPackager {
         }
     }
 
-    private struct MetadataCopyPair {
-        let output: AVAssetReaderTrackOutput
-        let input: AVAssetWriterInput
-    }
-
     private static func writeVideo(
         inputURL: URL,
         outputURL: URL,
@@ -249,13 +244,10 @@ struct LivePhotoPackager {
         let videoReader = try AVAssetReader(asset: videoAsset)
         let metadataReader = templateVideoURL == nil ? videoReader : try AVAssetReader(asset: metadataAsset)
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mov)
-        let targetDurationTime = try await videoAsset.load(.duration)
-        let targetDurationSeconds = CMTimeGetSeconds(targetDurationTime)
 
         writer.metadata = videoMetadataItems(assetIdentifier: assetIdentifier)
 
         var copyPairs: [(AVAssetReaderOutput, AVAssetWriterInput)] = []
-        var templateMetadataPairs: [MetadataCopyPair] = []
         let videoAudioTypes: [AVMediaType] = [.video, .audio]
 
         for mediaType in videoAudioTypes {
@@ -300,12 +292,7 @@ struct LivePhotoPackager {
                     throw PackagerError.cannotAddWriterInput(AVMediaType.metadata.rawValue)
                 }
                 writer.add(input)
-
-                if templateVideoURL != nil {
-                    templateMetadataPairs.append(MetadataCopyPair(output: output, input: input))
-                } else {
-                    copyPairs.append((output, input))
-                }
+                copyPairs.append((output, input))
             }
         }
 
@@ -321,31 +308,16 @@ struct LivePhotoPackager {
             metadataInput = input
         }
 
-        var templateMetadataSamples: [([CMSampleBuffer], AVAssetWriterInput)] = []
-
-        if templateVideoURL != nil {
-            guard metadataReader.startReading() else {
-                throw PackagerError.readerFailed(metadataReader.error?.localizedDescription ?? "unknown")
-            }
-
-            for pair in templateMetadataPairs {
-                var samples: [CMSampleBuffer] = []
-                while let sample = pair.output.copyNextSampleBuffer() {
-                    samples.append(sample)
-                }
-                templateMetadataSamples.append((samples, pair.input))
-            }
-
-            if metadataReader.status == .failed {
-                throw PackagerError.readerFailed(metadataReader.error?.localizedDescription ?? "unknown")
-            }
-        }
-
         guard writer.startWriting() else {
             throw PackagerError.writerFailed(writer.error?.localizedDescription ?? "unknown")
         }
         guard videoReader.startReading() else {
             throw PackagerError.readerFailed(videoReader.error?.localizedDescription ?? "unknown")
+        }
+        if templateVideoURL != nil {
+            guard metadataReader.startReading() else {
+                throw PackagerError.readerFailed(metadataReader.error?.localizedDescription ?? "unknown")
+            }
         }
 
         writer.startSession(atSourceTime: .zero)
@@ -354,152 +326,17 @@ struct LivePhotoPackager {
         }
 
         try await copySamples(copyPairs)
-        try await copyAdaptedTemplateMetadata(
-            templateMetadataSamples,
-            targetDurationSeconds: targetDurationSeconds,
-            stillImageTime: stillImageTime
-        )
 
         if videoReader.status == .failed {
             throw PackagerError.readerFailed(videoReader.error?.localizedDescription ?? "unknown")
+        }
+        if metadataReader.status == .failed {
+            throw PackagerError.readerFailed(metadataReader.error?.localizedDescription ?? "unknown")
         }
 
         await writer.finishWriting()
         if writer.status == .failed {
             throw PackagerError.writerFailed(writer.error?.localizedDescription ?? "unknown")
-        }
-    }
-
-    private static func copyAdaptedTemplateMetadata(
-        _ tracks: [([CMSampleBuffer], AVAssetWriterInput)],
-        targetDurationSeconds: Double,
-        stillImageTime: Double
-    ) async throws {
-        guard !tracks.isEmpty else {
-            return
-        }
-
-        for (samples, input) in tracks {
-            guard let first = samples.first else {
-                input.markAsFinished()
-                continue
-            }
-
-            if samples.count == 1 {
-                let timescale = max(CMSampleBufferGetPresentationTimeStamp(first).timescale, 600)
-                let duration = CMTime(value: 1, timescale: 600)
-                let presentationTime = CMTime(
-                    seconds: stillImageTime,
-                    preferredTimescale: timescale
-                )
-
-                let retimed = try copySampleBuffer(
-                    first,
-                    presentationTime: presentationTime,
-                    duration: duration
-                )
-
-                print("Adapted still-image metadata to \(stillImageTime)s")
-                try await appendSamples([retimed], to: input)
-                continue
-            }
-
-            // The intoLive neutral live-photo-info track is a fixed 60 Hz
-            // sequence whose payload is identical in every sample. Generate
-            // the same neutral sample from 0.05s until the requested endpoint.
-            let timescale = max(CMSampleBufferGetPresentationTimeStamp(first).timescale, 60000)
-            let firstTime = CMTime(seconds: 0.05, preferredTimescale: timescale)
-            let sampleDuration = CMTime(seconds: 1.0 / 60.0, preferredTimescale: timescale)
-            let targetCount = max(
-                1,
-                Int(round(max(0, targetDurationSeconds - 0.05) * 60.0))
-            )
-
-            var retimedSamples: [CMSampleBuffer] = []
-            retimedSamples.reserveCapacity(targetCount)
-
-            for index in 0..<targetCount {
-                let offset = CMTimeMultiply(sampleDuration, multiplier: Int32(index))
-                let presentationTime = CMTimeAdd(firstTime, offset)
-                let retimed = try copySampleBuffer(
-                    first,
-                    presentationTime: presentationTime,
-                    duration: sampleDuration
-                )
-                retimedSamples.append(retimed)
-            }
-
-            print(
-                "Adapted live-photo-info: \(targetCount) samples, " +
-                "0.05s -> \(targetDurationSeconds)s"
-            )
-
-            try await appendSamples(retimedSamples, to: input)
-        }
-    }
-
-    private static func copySampleBuffer(
-        _ sampleBuffer: CMSampleBuffer,
-        presentationTime: CMTime,
-        duration: CMTime
-    ) throws -> CMSampleBuffer {
-        var timing = CMSampleTimingInfo(
-            duration: duration,
-            presentationTimeStamp: presentationTime,
-            decodeTimeStamp: .invalid
-        )
-        var output: CMSampleBuffer?
-
-        let status = CMSampleBufferCreateCopyWithNewTiming(
-            allocator: kCFAllocatorDefault,
-            sampleBuffer: sampleBuffer,
-            sampleTimingEntryCount: 1,
-            sampleTimingArray: &timing,
-            sampleBufferOut: &output
-        )
-
-        guard status == noErr, let output else {
-            throw PackagerError.writerFailed("Could not retime metadata sample (OSStatus \(status))")
-        }
-
-        return output
-    }
-
-    private static func appendSamples(
-        _ samples: [CMSampleBuffer],
-        to input: AVAssetWriterInput
-    ) async throws {
-        try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<Void, Error>) in
-            let queue = DispatchQueue(label: "live-photo-packager.metadata-append")
-            var index = 0
-            var finished = false
-
-            input.requestMediaDataWhenReady(on: queue) {
-                guard !finished else { return }
-
-                while input.isReadyForMoreMediaData {
-                    if index < samples.count {
-                        if !input.append(samples[index]) {
-                            finished = true
-                            input.markAsFinished()
-                            continuation.resume(
-                                throwing: PackagerError.writerFailed(
-                                    "Could not append adapted metadata sample \(index + 1) of \(samples.count)"
-                                )
-                            )
-                            return
-                        }
-                        index += 1
-                    } else {
-                        finished = true
-                        input.markAsFinished()
-                        print("Appended \(index) adapted metadata samples")
-                        continuation.resume()
-                        return
-                    }
-                }
-            }
         }
     }
 
