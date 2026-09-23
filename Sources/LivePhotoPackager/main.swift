@@ -399,7 +399,7 @@ struct LivePhotoPackager {
                     duration: duration
                 )
 
-                print("Adapted still-image metadata to \\(stillImageTime)s")
+                print("Adapted still-image metadata to \(stillImageTime)s")
                 try await appendSamples([retimed], to: input)
                 continue
             }
@@ -430,8 +430,8 @@ struct LivePhotoPackager {
             }
 
             print(
-                "Adapted live-photo-info: \\(targetCount) samples, " +
-                "0.05s -> \\(targetDurationSeconds)s"
+                "Adapted live-photo-info: \(targetCount) samples, " +
+                "0.05s -> \(targetDurationSeconds)s"
             )
 
             try await appendSamples(retimedSamples, to: input)
@@ -484,7 +484,7 @@ struct LivePhotoPackager {
                             input.markAsFinished()
                             continuation.resume(
                                 throwing: PackagerError.writerFailed(
-                                    "Could not append adapted metadata sample \\(index + 1) of \\(samples.count)"
+                                    "Could not append adapted metadata sample \(index + 1) of \(samples.count)"
                                 )
                             )
                             return
@@ -493,7 +493,7 @@ struct LivePhotoPackager {
                     } else {
                         finished = true
                         input.markAsFinished()
-                        print("Appended \\(index) adapted metadata samples")
+                        print("Appended \(index) adapted metadata samples")
                         continuation.resume()
                         return
                     }
