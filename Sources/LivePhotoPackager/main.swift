@@ -469,7 +469,8 @@ struct LivePhotoPackager {
         _ samples: [CMSampleBuffer],
         to input: AVAssetWriterInput
     ) async throws {
-        try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<Void, Error>) in
             let queue = DispatchQueue(label: "live-photo-packager.metadata-append")
             var index = 0
             var finished = false
