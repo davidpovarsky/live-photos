@@ -163,7 +163,7 @@ final class ImportViewModel: ObservableObject {
     }
 
     private static func saveLivePhoto(photoURL: URL, videoURL: URL) async throws {
-        try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             PHPhotoLibrary.shared().performChanges({
                 let request = PHAssetCreationRequest.forAsset()
 
