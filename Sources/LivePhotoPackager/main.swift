@@ -204,6 +204,28 @@ struct LivePhotoPackager {
 
         let metadata = (CGImageSourceCopyPropertiesAtIndex(metadataSource, 0, nil) as? [String: Any]) ?? [:]
         let mutableMetadata = NSMutableDictionary(dictionary: metadata)
+
+        // Match the still-image metadata shape produced by intoLive. A bare
+        // MakerApple[17] pair is enough for Photos recognition, but the
+        // lock-screen path is stricter and the known-good sample also carries
+        // normal TIFF/Exif image metadata.
+        let tiff = NSMutableDictionary(
+            dictionary: metadata[kCGImagePropertyTIFFDictionary as String] as? [String: Any] ?? [:]
+        )
+        tiff.setObject(1, forKey: kCGImagePropertyTIFFOrientation as NSString)
+        tiff.setObject(72, forKey: kCGImagePropertyTIFFXResolution as NSString)
+        tiff.setObject(72, forKey: kCGImagePropertyTIFFYResolution as NSString)
+        tiff.setObject(2, forKey: kCGImagePropertyTIFFResolutionUnit as NSString)
+        mutableMetadata.setObject(tiff, forKey: kCGImagePropertyTIFFDictionary as NSString)
+
+        let exif = NSMutableDictionary(
+            dictionary: metadata[kCGImagePropertyExifDictionary as String] as? [String: Any] ?? [:]
+        )
+        exif.setObject("0221", forKey: kCGImagePropertyExifVersion as NSString)
+        exif.setObject(image.width, forKey: kCGImagePropertyExifPixelXDimension as NSString)
+        exif.setObject(image.height, forKey: kCGImagePropertyExifPixelYDimension as NSString)
+        mutableMetadata.setObject(exif, forKey: kCGImagePropertyExifDictionary as NSString)
+
         let makerApple = NSMutableDictionary(
             dictionary: metadata[kCGImagePropertyMakerAppleDictionary as String] as? [String: Any] ?? [:]
         )
