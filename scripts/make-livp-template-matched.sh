@@ -71,9 +71,32 @@ trap cleanup EXIT
 
 normalized_mov="$tmp_dir/normalized.mov"
 cover_jpg="$tmp_dir/cover.jpg"
+adapted_template="$tmp_dir/adapted-template.mov"
 pair_dir="$tmp_dir/pair"
 zip_dir="$tmp_dir/zip"
 mkdir -p "$pair_dir" "$zip_dir"
+
+expected_samples="$(python3 - "$duration" <<'PY'
+import sys
+duration=float(sys.argv[1])
+print(max(1, int(round((duration - 0.05) * 60))))
+PY
+)"
+
+echo "Extending neutral metadata template to ${duration}s..."
+python3 "$repo_dir/tools/extend-neutral-template.py" \
+  "$template_video" \
+  "$adapted_template" \
+  "$duration" \
+  "$cover_time"
+
+node "$repo_dir/tools/dump-mebx-samples.js" "$adapted_template" > "$tmp_dir/adapted-template-mebx.txt"
+cat "$tmp_dir/adapted-template-mebx.txt"
+
+if ! grep -q "samples=${expected_samples}" "$tmp_dir/adapted-template-mebx.txt"; then
+  echo "Adapted template does not contain the expected live-photo-info sample count (${expected_samples})." >&2
+  exit 1
+fi
 
 vf="scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},fps=${fps},setsar=1,format=yuv420p"
 
@@ -118,7 +141,7 @@ echo "Building Swift packager..."
 echo "Writing Live Photo metadata..."
 (
   cd "$repo_dir"
-  swift run livephoto-packager     --photo "$cover_jpg"     --video "$normalized_mov"     --template-video "$template_video"     --out "$pair_dir"     --photo-format heic     --still-image-time "$cover_time"     --preserve-input-metadata-tracks
+  swift run livephoto-packager     --photo "$cover_jpg"     --video "$normalized_mov"     --template-video "$adapted_template"     --out "$pair_dir"     --photo-format heic     --still-image-time "$cover_time"     --preserve-input-metadata-tracks
 )
 
 photo_path="$pair_dir/live-photo.heic"
@@ -132,13 +155,6 @@ fi
 echo "Verifying copied metadata tracks..."
 node "$repo_dir/tools/dump-mebx-samples.js" "$video_path" > "$tmp_dir/mebx.txt"
 cat "$tmp_dir/mebx.txt"
-
-expected_samples="$(python3 - "$duration" <<'PY'
-import sys
-duration=float(sys.argv[1])
-print(max(1, int(round((duration - 0.05) * 60))))
-PY
-)"
 
 if ! grep -q "samples=${expected_samples}" "$tmp_dir/mebx.txt"; then
   echo "Generated MOV does not contain the expected adapted live-photo-info sample count (${expected_samples})." >&2
