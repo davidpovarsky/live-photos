@@ -1,0 +1,54 @@
+name: Build Swift Playgrounds Importer
+
+on:
+  pull_request:
+    paths:
+      - "LivePhotoImporter.swiftpm/**"
+      - ".github/workflows/build-live-photo-importer.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Apple toolchain
+        run: |
+          xcodebuild -version
+          xcrun swift --version
+          xcrun --sdk iphonesimulator --show-sdk-version
+
+      - name: Type-check importer against iOS SDK
+        run: |
+          set -euo pipefail
+          SDK_PATH="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+          xcrun swiftc \
+            -parse-as-library \
+            -typecheck \
+            -sdk "$SDK_PATH" \
+            -target arm64-apple-ios17.0-simulator \
+            LivePhotoImporter.swiftpm/Sources/App.swift
+
+      - name: Package Swift Playgrounds app
+        run: |
+          set -euo pipefail
+          rm -f LivePhotoImporter.swiftpm.zip
+          ditto -c -k --sequesterRsrc --keepParent \
+            LivePhotoImporter.swiftpm \
+            LivePhotoImporter.swiftpm.zip
+          unzip -t LivePhotoImporter.swiftpm.zip
+
+      - name: Upload importer
+        uses: actions/upload-artifact@v4
+        with:
+          name: LivePhotoImporter-swiftpm
+          path: LivePhotoImporter.swiftpm.zip
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

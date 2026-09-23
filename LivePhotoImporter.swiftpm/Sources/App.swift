@@ -60,6 +60,9 @@ final class ImportViewModel: ObservableObject {
         do {
             let pair = try Self.findPair(in: urls)
             let localPair = try Self.copyToTemporaryDirectory(photo: pair.photo, video: pair.video)
+            defer {
+                try? FileManager.default.removeItem(at: localPair.directory)
+            }
 
             let authorization = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
             guard authorization == .authorized || authorization == .limited else {
@@ -69,8 +72,6 @@ final class ImportViewModel: ObservableObject {
             state = .importing
             try await Self.saveLivePhoto(photoURL: localPair.photo, videoURL: localPair.video)
             state = .success
-
-            try? FileManager.default.removeItem(at: localPair.directory)
         } catch {
             state = .failed(error.localizedDescription)
         }
