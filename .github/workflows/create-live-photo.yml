@@ -55,6 +55,63 @@ jobs:
       - name: Build Swift packager
         run: swift build
 
+
+  e2e-public-google-photos:
+    if: github.event_name == 'pull_request'
+    runs-on: macos-15
+    timeout-minutes: 25
+    env:
+      TEMPLATE_GZ_B64: ${{ secrets.LIVEPHOTO_NEUTRAL_TEMPLATE_GZ_B64 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install runtime helpers
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+            brew install ffmpeg
+          fi
+          npm install --no-save --ignore-scripts @marcus5914/google-photos-album-image-url-fetch@1.1.0
+
+      - name: Restore neutral metadata template
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${TEMPLATE_GZ_B64:-}"
+          printf '%s' "$TEMPLATE_GZ_B64" | base64 -D > "$RUNNER_TEMP/template.mov.gz"
+          gzip -dc "$RUNNER_TEMP/template.mov.gz" > "$RUNNER_TEMP/template-raw.mov"
+          python3 tools/repair-compact-live-photo-template.py             "$RUNNER_TEMP/template-raw.mov"             "$RUNNER_TEMP/template.mov"
+          node tools/dump-mebx-samples.js "$RUNNER_TEMP/template.mov" | tee "$RUNNER_TEMP/template-mebx.txt"
+          grep -q 'samples=57' "$RUNNER_TEMP/template-mebx.txt"
+
+      - name: Download public Google Photos video
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/download-video.sh             "https://photos.app.goo.gl/ea8rFM2SMzp7epUZ6"             "$RUNNER_TEMP/source-video"
+          ffprobe -v error             -select_streams v:0             -show_entries stream=codec_name,width,height             -of default=noprint_wrappers=1             "$RUNNER_TEMP/source-video"
+
+      - name: Generate and verify LIVP
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/make-livp-template-matched.sh             "$RUNNER_TEMP/source-video"             "$RUNNER_TEMP/e2e-test.livp"             "$RUNNER_TEMP/template.mov"
+          test -s "$RUNNER_TEMP/e2e-test.livp"
+          unzip -t "$RUNNER_TEMP/e2e-test.livp"
+          unzip -l "$RUNNER_TEMP/e2e-test.livp"
+
+      - name: Upload E2E artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-google-photos-live-photo
+          path: ${{ runner.temp }}/e2e-test.livp
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
   generate:
     if: github.event_name == 'workflow_dispatch'
     runs-on: macos-15
