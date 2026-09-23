@@ -29,3 +29,7 @@ in the same `PHAssetCreationRequest`.
 
 The files must already be a valid matched Live Photo pair. The app does not
 rewrite their metadata; it only imports them correctly as one PhotoKit asset.
+
+
+CI note: the Swift source is type-checked against the iOS SDK before this
+package is merged.
