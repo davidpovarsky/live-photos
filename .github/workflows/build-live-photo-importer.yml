@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 15
 
     steps:
@@ -24,15 +24,18 @@ jobs:
           xcrun swift --version
           xcrun --sdk iphonesimulator --show-sdk-version
 
-      - name: Type-check importer against iOS SDK
+      - name: Type-check importer with Swift 6 strict concurrency
         run: |
           set -euo pipefail
           SDK_PATH="$(xcrun --sdk iphonesimulator --show-sdk-path)"
           xcrun swiftc \
             -parse-as-library \
             -typecheck \
+            -swift-version 6 \
+            -strict-concurrency=complete \
+            -warnings-as-errors \
             -sdk "$SDK_PATH" \
-            -target arm64-apple-ios17.0-simulator \
+            -target arm64-apple-ios18.0-simulator \
             LivePhotoImporter.swiftpm/Sources/App.swift
 
       - name: Package Swift Playgrounds app
