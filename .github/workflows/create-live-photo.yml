@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       video_url:
-        description: "Google Photos, Google Drive, Dropbox, or direct HTTPS video link"
+        description: "SOURCE video: Google Photos, Google Drive, Dropbox, or direct HTTPS link"
         required: true
         type: string
       output_name:
@@ -121,7 +121,7 @@ jobs:
           VIDEO_URL: ${{ inputs.video_url }}
         run: |
           set -euo pipefail
-          scripts/download-video.sh "$VIDEO_URL" "$RUNNER_TEMP/source-video"
+          bash scripts/download-video.sh "$VIDEO_URL" "$RUNNER_TEMP/source-video"
 
       - name: Generate .livp
         id: generate
@@ -138,7 +138,10 @@ jobs:
           mkdir -p "$RUNNER_TEMP/live-photo-output"
           output="$RUNNER_TEMP/live-photo-output/$safe_name.livp"
 
-          scripts/make-livp-template-matched.sh             "$RUNNER_TEMP/source-video"             "$output"             "$TEMPLATE_VIDEO"
+          bash scripts/make-livp-template-matched.sh \
+            "$RUNNER_TEMP/source-video" \
+            "$output" \
+            "$TEMPLATE_VIDEO"
 
           echo "output=$output" >> "$GITHUB_OUTPUT"
           echo "name=$safe_name" >> "$GITHUB_OUTPUT"
