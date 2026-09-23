@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       video_url:
-        description: "Direct HTTPS, Google Drive, or Dropbox share link"
+        description: "Google Photos, Google Drive, Dropbox, or direct HTTPS video link"
         required: true
         type: string
       output_name:
@@ -45,6 +45,7 @@ jobs:
           python3 -m py_compile tools/compact-live-photo-template.py
           node --check tools/set-livp-zip-comment.js
           node --check tools/dump-mebx-samples.js
+          node --check tools/google-photos-video-url.mjs
 
       - name: Build Swift packager
         run: swift build
