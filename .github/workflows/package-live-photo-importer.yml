@@ -16,6 +16,17 @@ permissions:
   contents: read
 
 jobs:
+  typecheck-ios:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Type-check importer against iOS SDK
+        run: |
+          set -euo pipefail
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun swiftc             -typecheck             -target arm64-apple-ios17.0             -sdk "$SDK"             LivePhotoImporter.swiftpm/Sources/App.swift
+
   package:
     runs-on: ubuntu-latest
     steps:
