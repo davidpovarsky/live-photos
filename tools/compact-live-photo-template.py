@@ -147,7 +147,7 @@ track_copies = []
 for track in tracks:
     copied = bytearray(data[track["trak"][0]:track["trak"][5]])
     relative_stco = track["stco"][0] - track["trak"][0]
-    offset_field = relative_stco + 12
+    offset_field = relative_stco + 16
     copied[offset_field:offset_field + (8 if track["co64"] else 4)] = (
         b"\0" * (8 if track["co64"] else 4)
     )
