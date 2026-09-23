@@ -22,6 +22,11 @@ mkdir -p "$(dirname "$out")"
 rm -f "$out"
 
 case "$url" in
+  *github.com/*/actions/runs/*|*github.com/*/actions/workflows/*)
+    echo "This is a GitHub Actions page, not the source video." >&2
+    echo "Paste the Google Photos/Drive/Dropbox share link into video_url." >&2
+    exit 1
+    ;;
   *photos.app.goo.gl/*|*photos.google.com/*)
     echo "Resolving Google Photos share link..."
     video_url="$(node tools/google-photos-video-url.mjs "$url")"
