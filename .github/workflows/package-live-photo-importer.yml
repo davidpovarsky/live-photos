@@ -1,0 +1,36 @@
+name: Package iPad Live Photo Importer
+
+on:
+  pull_request:
+    paths:
+      - "LivePhotoImporter.swiftpm/**"
+      - ".github/workflows/package-live-photo-importer.yml"
+  push:
+    branches: [master]
+    paths:
+      - "LivePhotoImporter.swiftpm/**"
+      - ".github/workflows/package-live-photo-importer.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package Swift Playgrounds app
+        run: |
+          set -euo pipefail
+          test -f LivePhotoImporter.swiftpm/Package.swift
+          test -f LivePhotoImporter.swiftpm/Sources/App.swift
+          zip -r LivePhotoImporter.swiftpm.zip LivePhotoImporter.swiftpm
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LivePhotoImporter-swiftpm
+          path: LivePhotoImporter.swiftpm.zip
+          if-no-files-found: error
+          retention-days: 30
