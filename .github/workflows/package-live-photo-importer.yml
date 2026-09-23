@@ -1,6 +1,10 @@
 name: Package iPad Live Photo Importer
 
 on:
+  pull_request:
+    paths:
+      - "LivePhotoImporter.swiftpm/**"
+      - ".github/workflows/package-live-photo-importer.yml"
   push:
     branches: [master]
     paths:
