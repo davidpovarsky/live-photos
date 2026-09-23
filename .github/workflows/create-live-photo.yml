@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       video_url:
-        description: "Direct HTTPS, Google Drive, or Dropbox share link"
+        description: "Google Photos, Google Drive, Dropbox, or direct HTTPS video link"
         required: true
         type: string
       output_name:
@@ -31,6 +31,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
       - name: Show toolchain
         run: |
           swift --version
@@ -45,6 +49,7 @@ jobs:
           python3 -m py_compile tools/compact-live-photo-template.py
           node --check tools/set-livp-zip-comment.js
           node --check tools/dump-mebx-samples.js
+          node --check tools/google-photos-video-url.mjs
 
       - name: Build Swift packager
         run: swift build
@@ -59,12 +64,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install ffmpeg
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install runtime helpers
         run: |
           if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
             brew install ffmpeg
           fi
+          npm install --no-save --ignore-scripts @marcus5914/google-photos-album-image-url-fetch@1.1.0
           ffmpeg -version | head -n 1
+          node --version
 
       - name: Restore neutral Live Photo metadata template
         id: template
@@ -80,7 +91,7 @@ jobs:
           template_gz="$RUNNER_TEMP/neutral-template.mov.gz"
           template_mov="$RUNNER_TEMP/neutral-template.mov"
 
-          printf '%s' "$TEMPLATE_GZ_B64" | base64 --decode > "$template_gz"
+          printf '%s' "$TEMPLATE_GZ_B64" | base64 -D > "$template_gz"
           gzip -dc "$template_gz" > "$template_mov"
 
           if [[ ! -s "$template_mov" ]]; then
