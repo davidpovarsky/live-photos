@@ -11,9 +11,10 @@ struct LivePhotoImporterApp: App {
     }
 }
 
-final class ImportViewModel: ObservableObject, @unchecked Sendable {
+@MainActor
+final class ImportViewModel: ObservableObject {
 
-    enum ImportState: Equatable, Sendable {
+    enum ImportState: Equatable {
         case idle
         case preparing
         case importing
@@ -55,84 +56,78 @@ final class ImportViewModel: ObservableObject, @unchecked Sendable {
     }
 
     func importFiles(_ urls: [URL]) {
-        setState(.preparing)
+        state = .preparing
 
-        let pair: Pair
-        let localPair: LocalPair
-
-        do {
-            pair = try Self.findPair(in: urls)
-            localPair = try Self.copyToTemporaryDirectory(
-                photo: pair.photo,
-                video: pair.video
-            )
-        } catch {
-            setState(.failed(error.localizedDescription))
+        guard let pair = Self.findPair(in: urls) else {
+            state = .failed("בחר בדיוק שני קבצים יחד: HEIC/JPEG אחד ו־MOV אחד.")
             return
         }
 
-        PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] status in
-            guard let self else {
-                try? FileManager.default.removeItem(at: localPair.directory)
-                return
-            }
+        guard let localPair = Self.copyToTemporaryDirectory(
+            photo: pair.photo,
+            video: pair.video
+        ) else {
+            state = .failed("לא הצלחתי להעתיק את הקבצים שנבחרו.")
+            return
+        }
 
-            guard status == .authorized || status == .limited else {
-                try? FileManager.default.removeItem(at: localPair.directory)
-                self.setState(.failed(ImportError.photoPermissionDenied.localizedDescription))
-                return
-            }
+        PHPhotoLibrary.requestAuthorization(
+            for: .addOnly,
+            handler: { [weak self] status in
 
-            self.setState(.importing)
+                guard status == .authorized || status == .limited else {
+                    Self.cleanup(localPair.directory)
 
-            PHPhotoLibrary.shared().performChanges({
-                let request = PHAssetCreationRequest.forAsset()
-
-                let photoOptions = PHAssetResourceCreationOptions()
-                photoOptions.shouldMoveFile = false
-                request.addResource(
-                    with: .photo,
-                    fileURL: localPair.photo,
-                    options: photoOptions
-                )
-
-                let videoOptions = PHAssetResourceCreationOptions()
-                videoOptions.shouldMoveFile = false
-                request.addResource(
-                    with: .pairedVideo,
-                    fileURL: localPair.video,
-                    options: videoOptions
-                )
-            }) { [weak self] success, error in
-                try? FileManager.default.removeItem(at: localPair.directory)
-
-                guard let self else { return }
-
-                if let error {
-                    self.setState(.failed(
-                        ImportError.photosDidNotSave(error.localizedDescription)
-                            .localizedDescription
-                    ))
-                } else if success {
-                    self.setState(.success)
-                } else {
-                    self.setState(.failed(
-                        ImportError.photosDidNotSave("Unknown PhotoKit error")
-                            .localizedDescription
-                    ))
+                    Task { @MainActor [weak self] in
+                        self?.state = .failed(
+                            "אין הרשאה להוסיף ל־Photos. אשר הרשאה ב־Settings."
+                        )
+                    }
+                    return
                 }
-            }
-        }
-    }
 
-    private func setState(_ newState: ImportState) {
-        if Thread.isMainThread {
-            state = newState
-        } else {
-            DispatchQueue.main.async { [weak self] in
-                self?.state = newState
+                Task { @MainActor [weak self] in
+                    self?.state = .importing
+                }
+
+                PHPhotoLibrary.shared().performChanges({
+                    let request = PHAssetCreationRequest.forAsset()
+
+                    let photoOptions = PHAssetResourceCreationOptions()
+                    photoOptions.shouldMoveFile = false
+                    request.addResource(
+                        with: .photo,
+                        fileURL: localPair.photo,
+                        options: photoOptions
+                    )
+
+                    let videoOptions = PHAssetResourceCreationOptions()
+                    videoOptions.shouldMoveFile = false
+                    request.addResource(
+                        with: .pairedVideo,
+                        fileURL: localPair.video,
+                        options: videoOptions
+                    )
+                }, completionHandler: { [weak self] success, error in
+
+                    Self.cleanup(localPair.directory)
+
+                    Task { @MainActor [weak self] in
+                        if let error {
+                            self?.state = .failed(
+                                "Photos לא הצליח ליצור Live Photo: \(error.localizedDescription)"
+                            )
+                        } else if success {
+                            self?.state = .success
+                        } else {
+                            self?.state = .failed(
+                                "Photos לא הצליח ליצור Live Photo."
+                            )
+                        }
+                    }
+                })
             }
-        }
+        )
     }
 
     private struct Pair: Sendable {
@@ -146,77 +141,83 @@ final class ImportViewModel: ObservableObject, @unchecked Sendable {
         let video: URL
     }
 
-    private enum ImportError: LocalizedError {
-        case needExactlyOnePhotoAndOneVideo
-        case couldNotAccessFile(String)
-        case photoPermissionDenied
-        case photosDidNotSave(String)
-
-        var errorDescription: String? {
-            switch self {
-            case .needExactlyOnePhotoAndOneVideo:
-                return "בחר בדיוק שני קבצים יחד: HEIC/JPEG אחד ו־MOV אחד."
-            case .couldNotAccessFile(let name):
-                return "לא הצלחתי לגשת לקובץ: \(name)"
-            case .photoPermissionDenied:
-                return "אין הרשאה להוסיף ל־Photos. אשר הרשאה ב־Settings."
-            case .photosDidNotSave(let message):
-                return "Photos לא הצליח ליצור Live Photo: \(message)"
-            }
-        }
-    }
-
-    private static func findPair(in urls: [URL]) throws -> Pair {
+    nonisolated private static func findPair(in urls: [URL]) -> Pair? {
         guard urls.count == 2 else {
-            throw ImportError.needExactlyOnePhotoAndOneVideo
+            return nil
         }
 
-        let photoExtensions: Set<String> = ["heic", "heif", "jpg", "jpeg"]
-        let videoExtensions: Set<String> = ["mov", "mp4", "m4v"]
+        let photoExtensions: Set<String> = [
+            "heic",
+            "heif",
+            "jpg",
+            "jpeg"
+        ]
+
+        let videoExtensions: Set<String> = [
+            "mov",
+            "mp4",
+            "m4v"
+        ]
 
         guard let photo = urls.first(where: {
             photoExtensions.contains($0.pathExtension.lowercased())
         }) else {
-            throw ImportError.needExactlyOnePhotoAndOneVideo
+            return nil
         }
 
         guard let video = urls.first(where: {
             videoExtensions.contains($0.pathExtension.lowercased())
         }) else {
-            throw ImportError.needExactlyOnePhotoAndOneVideo
+            return nil
         }
 
         guard photo != video else {
-            throw ImportError.needExactlyOnePhotoAndOneVideo
+            return nil
         }
 
         return Pair(photo: photo, video: video)
     }
 
-    private static func copyToTemporaryDirectory(
+    nonisolated private static func copyToTemporaryDirectory(
         photo: URL,
         video: URL
-    ) throws -> LocalPair {
+    ) -> LocalPair? {
+
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(
                 "LivePhotoImport-\(UUID().uuidString)",
                 isDirectory: true
             )
 
-        try FileManager.default.createDirectory(
+        guard (try? FileManager.default.createDirectory(
             at: directory,
             withIntermediateDirectories: true
+        )) != nil else {
+            return nil
+        }
+
+        let localPhoto = directory.appendingPathComponent(
+            photo.lastPathComponent
         )
 
-        let localPhoto = directory.appendingPathComponent(photo.lastPathComponent)
-        let localVideo = directory.appendingPathComponent(video.lastPathComponent)
+        let localVideo = directory.appendingPathComponent(
+            video.lastPathComponent
+        )
 
-        do {
-            try copySecurityScopedFile(from: photo, to: localPhoto)
-            try copySecurityScopedFile(from: video, to: localVideo)
-        } catch {
-            try? FileManager.default.removeItem(at: directory)
-            throw error
+        guard copySecurityScopedFile(
+            from: photo,
+            to: localPhoto
+        ) else {
+            cleanup(directory)
+            return nil
+        }
+
+        guard copySecurityScopedFile(
+            from: video,
+            to: localVideo
+        ) else {
+            cleanup(directory)
+            return nil
         }
 
         return LocalPair(
@@ -226,10 +227,11 @@ final class ImportViewModel: ObservableObject, @unchecked Sendable {
         )
     }
 
-    private static func copySecurityScopedFile(
+    nonisolated private static func copySecurityScopedFile(
         from source: URL,
         to destination: URL
-    ) throws {
+    ) -> Bool {
+
         let didStart = source.startAccessingSecurityScopedResource()
 
         defer {
@@ -238,22 +240,23 @@ final class ImportViewModel: ObservableObject, @unchecked Sendable {
             }
         }
 
-        do {
-            if FileManager.default.fileExists(atPath: destination.path) {
-                try FileManager.default.removeItem(at: destination)
-            }
-
-            try FileManager.default.copyItem(
-                at: source,
-                to: destination
-            )
-        } catch {
-            throw ImportError.couldNotAccessFile(source.lastPathComponent)
+        if FileManager.default.fileExists(atPath: destination.path) {
+            _ = try? FileManager.default.removeItem(at: destination)
         }
+
+        return (try? FileManager.default.copyItem(
+            at: source,
+            to: destination
+        )) != nil
+    }
+
+    nonisolated private static func cleanup(_ url: URL) {
+        _ = try? FileManager.default.removeItem(at: url)
     }
 }
 
 struct ContentView: View {
+
     @StateObject private var model = ImportViewModel()
 
     var body: some View {
@@ -278,9 +281,12 @@ struct ContentView: View {
                 Button {
                     model.showFilePicker = true
                 } label: {
-                    Label("בחר HEIC + MOV", systemImage: "doc.on.doc")
-                        .frame(maxWidth: 320)
-                        .padding(.vertical, 8)
+                    Label(
+                        "בחר HEIC + MOV",
+                        systemImage: "doc.on.doc"
+                    )
+                    .frame(maxWidth: 320)
+                    .padding(.vertical, 8)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
@@ -307,6 +313,7 @@ struct ContentView: View {
             switch result {
             case .success(let urls):
                 model.importFiles(urls)
+
             case .failure(let error):
                 model.state = .failed(error.localizedDescription)
             }
