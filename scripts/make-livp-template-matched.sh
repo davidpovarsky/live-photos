@@ -4,20 +4,25 @@ set -euo pipefail
 usage() {
   cat >&2 <<'USAGE'
 Usage:
-  scripts/make-livp-template-matched.sh INPUT_VIDEO OUTPUT.livp NEUTRAL_METADATA_TEMPLATE.mov
+  scripts/make-livp-template-matched.sh INPUT_VIDEO OUTPUT.livp NEUTRAL_METADATA_TEMPLATE.mov [START_TIME] [DURATION]
 
-Creates the fixed lock-screen-oriented MVP:
+Defaults:
+  START_TIME = 0
+  DURATION   = 3.0
+
+Creates a lock-screen-oriented Live Photo using the real source-video motion:
   - 1080x1920
-  - 1.0 second
+  - configurable duration (default 3.0s)
+  - configurable source start time
   - 60 fps
   - HEVC tagged hvc1
   - silent AAC audio
-  - cover frame at 0.5s
-  - neutral mebx metadata copied from the supplied compact template
+  - cover frame at the middle of the output
+  - neutral mebx metadata adapted to the requested duration
 USAGE
 }
 
-if [[ $# -ne 3 ]]; then
+if [[ $# -lt 3 || $# -gt 5 ]]; then
   usage
   exit 2
 fi
@@ -25,6 +30,8 @@ fi
 input_video="$1"
 output_livp="$2"
 template_video="$3"
+start_time="${4:-0}"
+duration="${5:-3.0}"
 
 for f in "$input_video" "$template_video"; do
   if [[ ! -f "$f" ]]; then
@@ -37,11 +44,24 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd "$script_dir/.." && pwd)"
 output_livp="$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$output_livp")"
 
+python3 - "$start_time" "$duration" <<'PY'
+import sys
+start=float(sys.argv[1])
+duration=float(sys.argv[2])
+if start < 0:
+    raise SystemExit("START_TIME must be >= 0")
+if duration <= 0 or duration > 5:
+    raise SystemExit("DURATION must be > 0 and <= 5 seconds")
+PY
+
 width=1080
 height=1920
 fps=60
-duration=1
-cover_time=0.5
+cover_time="$(python3 - "$duration" <<'PY'
+import sys
+print(f"{float(sys.argv[1]) / 2:.6f}")
+PY
+)"
 
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/make-livp-template.XXXXXX")"
 cleanup() {
@@ -51,15 +71,40 @@ trap cleanup EXIT
 
 normalized_mov="$tmp_dir/normalized.mov"
 cover_jpg="$tmp_dir/cover.jpg"
+adapted_template="$tmp_dir/adapted-template.mov"
 pair_dir="$tmp_dir/pair"
 zip_dir="$tmp_dir/zip"
 mkdir -p "$pair_dir" "$zip_dir"
+
+expected_samples="$(python3 - "$duration" <<'PY'
+import sys
+duration=float(sys.argv[1])
+print(max(1, int(round((duration - 0.05) * 60))))
+PY
+)"
+
+echo "Extending neutral metadata template to ${duration}s..."
+python3 "$repo_dir/tools/extend-neutral-template.py" \
+  "$template_video" \
+  "$adapted_template" \
+  "$duration" \
+  "$cover_time"
+
+node "$repo_dir/tools/dump-mebx-samples.js" "$adapted_template" > "$tmp_dir/adapted-template-mebx.txt"
+cat "$tmp_dir/adapted-template-mebx.txt"
+
+if ! grep -q "samples=${expected_samples}" "$tmp_dir/adapted-template-mebx.txt"; then
+  echo "Adapted template does not contain the expected live-photo-info sample count (${expected_samples})." >&2
+  exit 1
+fi
 
 vf="scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},fps=${fps},setsar=1,format=yuv420p"
 
 encode_common=(
   -y
-  -stream_loop -1 -i "$input_video"
+  -stream_loop -1
+  -ss "$start_time"
+  -i "$input_video"
   -f lavfi -i "anullsrc=channel_layout=stereo:sample_rate=44100"
   -t "$duration"
   -map 0:v:0 -map 1:a:0
@@ -71,7 +116,8 @@ encode_common=(
   -movflags +faststart
 )
 
-echo "Normalizing source video to ${width}x${height} / ${fps}fps / ${duration}s..."
+echo "Using original source motion from ${start_time}s for ${duration}s."
+echo "Normalizing to ${width}x${height} / ${fps}fps; cover at ${cover_time}s..."
 
 if ffmpeg "${encode_common[@]}" -c:v hevc_videotoolbox "$normalized_mov"; then
   echo "Encoded HEVC with VideoToolbox."
@@ -95,7 +141,7 @@ echo "Building Swift packager..."
 echo "Writing Live Photo metadata..."
 (
   cd "$repo_dir"
-  swift run livephoto-packager     --photo "$cover_jpg"     --video "$normalized_mov"     --template-video "$template_video"     --out "$pair_dir"     --photo-format heic     --preserve-input-metadata-tracks
+  swift run livephoto-packager     --photo "$cover_jpg"     --video "$normalized_mov"     --template-video "$adapted_template"     --out "$pair_dir"     --photo-format heic     --still-image-time "$cover_time"     --preserve-input-metadata-tracks
 )
 
 photo_path="$pair_dir/live-photo.heic"
@@ -110,8 +156,8 @@ echo "Verifying copied metadata tracks..."
 node "$repo_dir/tools/dump-mebx-samples.js" "$video_path" > "$tmp_dir/mebx.txt"
 cat "$tmp_dir/mebx.txt"
 
-if ! grep -q 'samples=57' "$tmp_dir/mebx.txt"; then
-  echo "Generated MOV is missing the 57-sample neutral live-photo-info track." >&2
+if ! grep -q "samples=${expected_samples}" "$tmp_dir/mebx.txt"; then
+  echo "Generated MOV does not contain the expected adapted live-photo-info sample count (${expected_samples})." >&2
   exit 1
 fi
 
